@@ -90,15 +90,23 @@ Invalid ranges clear the result and prevent an export of stale rows.
 CSV exports use the current period and any search/category filter, even if you
 haven't pressed Refresh. Balances offers an export of all matched bills and a
 separate export of the selected customer's payments. Statistics exports its
-summary metrics and the selected period's daily, monthly, product and category
+summary metrics and the selected period's daily, monthly, product, brand/style and category
 series. CSV is UTF-8 for Excel, with spreadsheet formulas escaped in text fields.
 
 Statistics includes total revenue, expenses, net profit, payments collected,
 outstanding credit, bill count, pieces sold, average bill value, and daily mean,
 median and population standard deviation. Daily statistics use days with sales,
 including days with zero-value bills. Monthly and daily bars use the selected
-period. The doughnut chart switches between products and categories; small groups
+period. The doughnut chart switches between products, brands/styles and categories; small groups
 beyond the top eight are combined as Other.
+
+Best Selling Items shows category, Brand / Style and item name together (for
+example, Shirts → CK → CK shirt). Best Selling Brands / Styles groups each brand
+within its category. Both tables show the top ten by quantity sold or revenue,
+using the selected period; CSV includes all groups. Exchange returns reduce
+quantity and revenue. Reports use current catalog labels; items without a brand
+show “No brand / style”, and historical lines without a linked catalog item show
+“Unknown brand / style”. Missing historical brands cannot be reconstructed.
 
 Definitions:
 
@@ -108,7 +116,7 @@ Definitions:
 - Outstanding means the current unpaid amount on bills issued in the period.
   Balances' "Paid toward these bills" includes later payments too. Its separate
   payment history uses the payment-date filter.
-- Product/category revenue allocates each bill's total to its lines, including
+- Product/brand/category revenue allocates each bill's total to its lines, including
   historical bill-level discounts and GST. Allocations retain exact cents so
   chart totals reconcile to billed revenue.
 
