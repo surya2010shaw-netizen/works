@@ -18,7 +18,8 @@ APP_DIR = ROOT / os.environ.get('BILLING_APP_DIR', 'app')
 sys.path.insert(0, str(APP_DIR))
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PySide6.QtCore import QDate
+from PySide6.QtCore import QDate, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox, QFileDialog, QDialog
 from database import Database, SCHEMA
 from billing_tab import BillingTab
@@ -438,6 +439,37 @@ class RegressionTests(unittest.TestCase):
             tab._complete_bill()
         self.assertEqual(self.db.get_customer_by_phone('222')['name'], 'B')
         self.assertEqual(self.db.get_customer_by_phone('111')['name'], 'A')
+
+    def test_phone_suggestions_show_customer_name_and_save_selected_identity(self):
+        cid = self.db.add_customer('Ravi', '910884773', 'Address Ravi')
+        self.db.add_customer('Ravi', '910885555', 'Other address')
+        self.db.add_customer('No phone', '')
+        tab = BillingTab(self.db, session=self.session)
+        self.addCleanup(tab.close)
+        tab.show()
+        tab.phone_input.setFocus()
+        QTest.keyClicks(tab.phone_input, '910884')
+        self.app.processEvents()
+        completer = tab.phone_input.completer()
+        self.assertEqual(completer.completionCount(), 1)
+        index = completer.completionModel().index(0, 0)
+        self.assertEqual(index.data(Qt.DisplayRole), '910884773 — Ravi')
+        self.assertEqual(completer.currentCompletion(), '910884773')
+        popup = completer.popup()
+        popup.setCurrentIndex(index)
+        QTest.keyClick(popup, Qt.Key_Return)
+        self.assertEqual(tab.phone_input.text(), '910884773')
+        self.assertEqual(tab.customer_name_input.text(), 'Ravi')
+        self.assertEqual(tab.customer_address_input.text(), 'Address Ravi')
+        self.assertEqual(tab.matched_customer['id'], cid)
+        tab._add_to_cart(None, 'Test', 'Shirts', 1, 100)
+        with patch('billing_tab.ReceiptDialog'):
+            tab._complete_bill()
+        self.assertEqual(self.db.search_bills()[0]['customer_id'], cid)
+        self.assertEqual(len(self.db.search_customers('')), 3)
+        refreshed = tab.phone_input.completer()
+        refreshed.setCompletionPrefix('91088')
+        self.assertEqual(refreshed.completionCount(), 2)
 
     def test_blank_phone_transition_and_new_manual_name(self):
         self.db.add_customer('A', '111', 'Address A')

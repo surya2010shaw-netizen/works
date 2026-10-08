@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QDateEdit,
 )
 from PySide6.QtCore import Qt, QDate
+from PySide6.QtGui import QStandardItem, QStandardItemModel
 
 from widgets import rupees, EditableSearchCombo, divider, make_heading
 from receipt import ReceiptDialog
@@ -396,10 +397,22 @@ class BillingTab(QWidget):
     def _refresh_phone_completer(self):
         if not self.session.is_admin:
             return
-        phones = [c["phone"] for c in self.db.search_customers("") if c["phone"]]
-        completer = QCompleter(phones, self)
+        model = QStandardItemModel()
+        for customer in self.db.search_customers(""):
+            if customer["phone"]:
+                item = QStandardItem(f'{customer["phone"]} — {customer["name"]}')
+                item.setData(customer["phone"], Qt.UserRole)
+                model.appendRow(item)
+        completer = QCompleter(model, self)
+        model.setParent(completer)
+        completer.setCompletionRole(Qt.UserRole)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.activated[str].connect(self._select_customer_phone)
         self.phone_input.setCompleter(completer)
+
+    def _select_customer_phone(self, phone):
+        self.phone_input.setText(phone)
+        self._lookup_customer()
 
     def refresh_catalog(self):
         """Call after inventory changes elsewhere so combos/suggestions are current."""
