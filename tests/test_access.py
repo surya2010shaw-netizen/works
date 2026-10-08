@@ -10,6 +10,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / os.environ.get('BILLING_APP_DIR', 'app')))
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+from PySide6.QtTest import QTest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 from access import AccessSession, RoleDatabase, verify_admin_password
@@ -190,6 +191,62 @@ class AccessTests(unittest.TestCase):
             tab._complete_bill()
         self.assertEqual(self.db.get_customer_by_phone('123')['name'], 'Original')
         self.assertEqual(self.db.search_bills()[0]['customer_id'], cid)
+
+    def test_employee_phone_suggestions_select_and_save_existing_customer(self):
+        cid = self.db.add_customer('Ravi', '910884773', 'Ravi address', 'Private notes')
+        self.db.add_customer('Ravi', '910885555', 'Other address')
+        self.db.add_customer('No phone', '')
+        tab = self.tab()
+        self.assertFalse(self.session.is_admin)
+        tab.show()
+        tab.phone_input.setFocus()
+        QTest.keyClicks(tab.phone_input, '910884')
+        self.app.processEvents()
+        completer = tab.phone_input.completer()
+        self.assertEqual(completer.completionCount(), 1)
+        index = completer.completionModel().index(0, 0)
+        self.assertEqual(index.data(Qt.DisplayRole), '910884773 — Ravi')
+        self.assertEqual(completer.currentCompletion(), '910884773')
+        popup = completer.popup()
+        popup.setCurrentIndex(index)
+        QTest.keyClick(popup, Qt.Key_Return)
+        self.assertEqual(tab.phone_input.text(), '910884773')
+        self.assertEqual(tab.customer_name_input.text(), 'Ravi')
+        self.assertEqual(tab.customer_address_input.text(), 'Ravi address')
+        self.assertEqual(tab.matched_customer['id'], cid)
+        self.assertEqual(tab.customer_info_label.text(), 'Returning customer')
+        with patch('billing_tab.ReceiptDialog'):
+            tab._complete_bill()
+        self.assertEqual(self.db.search_bills()[0]['customer_id'], cid)
+        self.assertEqual(len(self.db.search_customers()), 3)
+        completer = tab.phone_input.completer()
+        completer.setCompletionPrefix('91088')
+        self.assertEqual(completer.completionCount(), 2)
+
+    def test_employee_phone_suggestions_refresh_and_keep_directory_restricted(self):
+        self.db.add_customer('Ravi', '910884773', 'Address', 'Private notes')
+        self.db.add_customer('No phone', '')
+        rows = self.access.get_customer_phone_suggestions()
+        self.assertEqual([dict(r) for r in rows], [dict(name='Ravi', phone='910884773')])
+        for method, args in [('search_customers', ()), ('get_customer_total_spent', (1,)),
+                             ('get_wishlist', (1,))]:
+            with self.subTest(method=method), self.assertRaises(PermissionError):
+                getattr(self.access, method)(*args)
+        tab = self.tab()
+        self.db.add_customer('New customer', '910889999')
+        tab.refresh_catalog()
+        completer = tab.phone_input.completer()
+        completer.setCompletionPrefix('91088')
+        self.assertEqual(completer.completionCount(), 2)
+        self.assertTrue(self.session.login('1852j'))
+        tab.refresh_catalog()
+        self.session.logout()
+        tab.refresh_catalog()
+        completer = tab.phone_input.completer()
+        completer.setCompletionPrefix('910889')
+        self.assertEqual(completer.currentCompletion(), '910889999')
+        self.assertEqual(completer.completionModel().index(0, 0).data(Qt.DisplayRole),
+                         '910889999 — New customer')
 
     def test_command_boundary_blocks_management_and_stale_admin_callback(self):
         for method, args in [('add_expense', ('Test', 1)), ('search_bills', ()),

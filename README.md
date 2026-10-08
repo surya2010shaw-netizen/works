@@ -11,6 +11,10 @@ balances, expenses, sales history, statistics, and the backup/export tools avail
 in the recommended copy. **Lock admin / Employee mode** clears the unfinished bill
 and returns to employee access. Restarting always begins in Employee mode.
 
+In both Employee and Admin billing, typing a phone number shows matching
+`phone — customer name` suggestions. Selecting one fills the existing customer
+details and uses their stored phone number for the bill.
+
 The admin password configured for this release also authorizes deletion confirmations.
 The local application access gate does not replace Windows account/file permissions
 for protecting the SQLite database or preventing edits to the program itself.

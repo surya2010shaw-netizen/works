@@ -1151,6 +1151,15 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries, EmployeeQueries)
                 ).fetchall()
             return conn.execute("SELECT * FROM customers ORDER BY name").fetchall()
 
+    def get_customer_phone_suggestions(self):
+        """Phone/name labels for billing in either role."""
+        with self._conn() as conn:
+            return conn.execute(
+                """SELECT name, phone FROM customers
+                   WHERE phone IS NOT NULL AND TRIM(phone) != ''
+                   ORDER BY name, phone"""
+            ).fetchall()
+
     def get_customer_by_phone(self, phone):
         with self._conn() as conn:
             return conn.execute(

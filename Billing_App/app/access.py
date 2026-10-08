@@ -46,7 +46,7 @@ class RoleDatabase:
     _EMPLOYEE_METHODS = frozenset({
         "get_categories", "get_subtypes", "get_items", "get_item_by_barcode",
         "get_item_by_id", "find_item_by_name", "get_customer_by_phone",
-        "add_customer", "quote_offers",
+        "add_customer", "quote_offers", "get_customer_phone_suggestions",
     })
 
     def __init__(self, database, session):

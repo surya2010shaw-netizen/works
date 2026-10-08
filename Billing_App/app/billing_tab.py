@@ -395,10 +395,8 @@ class BillingTab(QWidget):
         self._on_category_changed()
 
     def _refresh_phone_completer(self):
-        if not self.session.is_admin:
-            return
         model = QStandardItemModel()
-        for customer in self.db.search_customers(""):
+        for customer in self.db.get_customer_phone_suggestions():
             if customer["phone"]:
                 item = QStandardItem(f'{customer["phone"]} — {customer["name"]}')
                 item.setData(customer["phone"], Qt.UserRole)
