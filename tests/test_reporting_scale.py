@@ -194,6 +194,7 @@ class ReportingScaleTests(unittest.TestCase):
         tab = self.tab(StatsTab)
         with patch.object(self.db,'report_statistics',side_effect=AssertionError('unexpected query')):
             tab.chart_group.setCurrentText('Categories')
+            tab.chart_group.setCurrentText('Brands / Styles')
             tab.top_items_sort_combo.setCurrentText('Revenue')
         self.assertFalse(any('Revenue includes GST' in label.text() for label in tab.findChildren(QLabel)))
 

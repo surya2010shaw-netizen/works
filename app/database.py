@@ -1113,6 +1113,15 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries, EmployeeQueries)
                 ).fetchall()
             return conn.execute("SELECT * FROM customers ORDER BY name").fetchall()
 
+    def get_customer_phone_suggestions(self):
+        """Phone/name labels for billing in either role."""
+        with self._conn() as conn:
+            return conn.execute(
+                """SELECT name, phone FROM customers
+                   WHERE phone IS NOT NULL AND TRIM(phone) != ''
+                   ORDER BY name, phone"""
+            ).fetchall()
+
     def get_customer_by_phone(self, phone):
         with self._conn() as conn:
             return conn.execute(
@@ -1136,10 +1145,10 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries, EmployeeQueries)
             )
             return cur.lastrowid
 
-    def update_customer(self, cid, name, phone, address, notes):
+    def update_customer(self, cid, name, phone, address, notes=None):
         with self._conn() as conn:
             conn.execute(
-                "UPDATE customers SET name=?, phone=?, address=?, notes=? WHERE id=?",
+                "UPDATE customers SET name=?, phone=?, address=?, notes=COALESCE(?,notes) WHERE id=?",
                 (
                     name.strip(),
                     (phone.strip() if phone else None) or None,
@@ -1232,9 +1241,13 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries, EmployeeQueries)
         initial_payment_amount=None,
         payment_notes="",
         employee_pricing=False,
+        customer_details=None,
     ):
         """
-        Save an entire bill as one atomic transaction.
+        Save a bill and optional customer details as one atomic transaction.
+
+        customer_details supplies name, phone and address from the billing form.
+        Employee sales reuse an existing phone without changing its profile.
 
         Existing callers that do not pass GST/payment arguments continue to
         work. In that case the bill is treated as fully paid, preserving the
@@ -1296,6 +1309,23 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries, EmployeeQueries)
 
             if employee_pricing or any(i.get('offer_checked') or i.get('offer_id_snapshot') for i in items):
                 self._validate_offer_bill(conn, locals())
+
+            if customer_details is not None:
+                name = customer_details['name'].strip()
+                phone = (customer_details.get('phone') or '').strip() or None
+                address = (customer_details.get('address') or '').strip()
+                if not name:
+                    raise ValueError("Customer name is required.")
+                existing = conn.execute('SELECT id FROM customers WHERE phone=?', (phone,)).fetchone() if phone else None
+                if existing:
+                    customer_id = existing['id']
+                    if not employee_pricing:
+                        conn.execute('UPDATE customers SET name=?,address=? WHERE id=?',
+                                     (name, address, customer_id))
+                else:
+                    customer_id = conn.execute(
+                        "INSERT INTO customers(name,phone,address,notes) VALUES (?,?,?,'')",
+                        (name, phone, address)).lastrowid
 
             bill_no = self._next_bill_no_conn(conn, bill_date)
             conn.execute("""INSERT INTO bill_sequences(date_key, last_seq) VALUES (?, ?)

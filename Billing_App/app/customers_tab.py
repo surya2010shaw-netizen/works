@@ -722,7 +722,6 @@ class CustomersTab(QWidget):
                 name,
                 phone,
                 address,
-                "",
             )
 
             self._refresh_customer_list()

@@ -86,7 +86,7 @@ class StatsTab(QWidget):
         category_box.setMinimumHeight(460)
         category_v = QVBoxLayout(category_box)
         self.chart_group = QComboBox()
-        self.chart_group.addItems(["Products", "Categories"])
+        self.chart_group.addItems(["Products", "Categories", "Brands / Styles"])
         self.chart_group.currentTextChanged.connect(self._change_chart_group)
         category_v.addWidget(self.chart_group)
         self.category_figure = Figure(figsize=(4.2, 3.6), constrained_layout=True)
@@ -117,15 +117,28 @@ class StatsTab(QWidget):
         sort_row.addStretch()
         top_items_v.addLayout(sort_row)
 
-        self.top_items_table = QTableWidget(0, 4)
-        self.top_items_table.setHorizontalHeaderLabels(["Item", "Category", "Qty Sold", "Revenue"])
+        self.top_items_table = QTableWidget(0, 5)
+        self.top_items_table.setHorizontalHeaderLabels(["Item", "Category", "Brand / Style", "Qty Sold", "Revenue"])
         self.top_items_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        for column in (1, 2, 3):
+        for column in (1, 2, 3, 4):
             self.top_items_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
         self.top_items_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.top_items_table.setMinimumHeight(260)
         top_items_v.addWidget(self.top_items_table)
         outer.addWidget(top_items_box)
+
+        top_brands_box = QGroupBox("Best Selling Brands / Styles")
+        brands_v = QVBoxLayout(top_brands_box)
+        brands_v.addWidget(QLabel("Uses the same Rank by selection as Best Selling Items."))
+        self.top_brands_table = QTableWidget(0, 4)
+        self.top_brands_table.setHorizontalHeaderLabels(["Category", "Brand / Style", "Qty Sold", "Revenue"])
+        self.top_brands_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        for column in (0, 2, 3):
+            self.top_brands_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        self.top_brands_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.top_brands_table.setMinimumHeight(260)
+        brands_v.addWidget(self.top_brands_table)
+        outer.addWidget(top_brands_box)
 
         # ---------------- customer preferences ----------------
         pref_row = QHBoxLayout()
@@ -167,7 +180,7 @@ class StatsTab(QWidget):
                                    (self.monthly_figure, self.monthly_canvas)):
                 figure.clear()
                 canvas.draw()
-            for table in (self.top_items_table, self.top_customers_table, self.wishlist_table):
+            for table in (self.top_items_table, self.top_brands_table, self.top_customers_table, self.wishlist_table):
                 table.setRowCount(0)
             return False
         self._report = self.db.report_statistics(date_from, date_to)
@@ -247,11 +260,20 @@ class StatsTab(QWidget):
         self.trend_canvas.draw_idle()
 
     def _refresh_category_chart(self, date_from, date_to):
-        product = self.chart_group.currentText() == 'Products'
-        rows = self._report['products' if product else 'categories']
+        group = self.chart_group.currentText()
+        report_key, title = {'Products': ('products', 'product'),
+                             'Categories': ('categories', 'category'),
+                             'Brands / Styles': ('brands', 'brand / style')}[group]
+        rows = self._report[report_key]
+        def label(row):
+            if report_key == 'products':
+                return f"{row['category']} → {row['brand']} → {row['name']}"
+            if report_key == 'brands':
+                return f"{row['category']} → {row['brand']}"
+            return row['category']
         if any(r['revenue'] < 0 for r in rows):
             ranked = sorted(rows, key=lambda r: abs(r['revenue']), reverse=True)
-            names = [(f"{r['name']} ({r['category']})" if product else r['category']) for r in ranked[:8]]
+            names = [label(r) for r in ranked[:8]]
             values = [r['revenue'] for r in ranked[:8]]
             if len(ranked)>8:
                 names.append('Other (net)')
@@ -260,12 +282,12 @@ class StatsTab(QWidget):
             ax = self.category_figure.add_subplot(111)
             ax.barh(names, values, color=[COLORS['primary'] if value>=0 else COLORS['accent'] for value in values])
             ax.axvline(0, color=COLORS['muted'], linewidth=1)
-            ax.set_title('Net sales after exchanges — ' + ('products' if product else 'categories'))
+            ax.set_title('Net sales after exchanges — ' + title)
             ax.set_xlabel('Revenue (Rs.)')
             self.category_canvas.draw_idle()
             return
         rows = [r for r in rows if r['revenue'] > 0]
-        names = [(f"{r['name']} ({r['category']})" if product else r['category']) for r in rows]
+        names = [label(r) for r in rows]
         values = [r['revenue'] for r in rows]
         if len(values) > 8:
             names, values = names[:8] + ['Other'], values[:8] + [sum(values[8:])]
@@ -281,7 +303,7 @@ class StatsTab(QWidget):
             labels = [textwrap.fill(f'{name} — {rupees(value)} ({value/total:.1%})', 45)
                       for name, value in zip(names, values)]
             ax.legend(wedges, labels, loc='center left', bbox_to_anchor=(1, .5), fontsize=8, frameon=False)
-            ax.set_title('Sales by ' + ('product' if product else 'category'))
+            ax.set_title('Sales by ' + title)
         else:
             ax.text(.5, .5, 'No positive sales in this period', ha='center', va='center')
             ax.set_axis_off()
@@ -315,8 +337,14 @@ class StatsTab(QWidget):
         rows = sorted(self._report['products'], key=lambda r: r[key], reverse=True)[:10]
         self.top_items_table.setRowCount(len(rows))
         for row_idx, r in enumerate(rows):
-            for col, value in enumerate([r['name'], r['category'], str(r['quantity']), rupees(r['revenue'])]):
+            for col, value in enumerate([r['name'], r['category'], r['brand'], str(r['quantity']), rupees(r['revenue'])]):
                 self.top_items_table.setItem(row_idx, col, QTableWidgetItem(value))
+
+        brands = sorted(self._report['brands'], key=lambda r: r[key], reverse=True)[:10]
+        self.top_brands_table.setRowCount(len(brands))
+        for row_idx, r in enumerate(brands):
+            for col, value in enumerate([r['category'], r['brand'], str(r['quantity']), rupees(r['revenue'])]):
+                self.top_brands_table.setItem(row_idx, col, QTableWidgetItem(value))
 
     def _refresh_top_customers(self, date_from, date_to):
         rows = self.db.stat_top_customers(date_from, date_to, limit=10)
@@ -346,7 +374,9 @@ class StatsTab(QWidget):
         rows += [['metric', key, '', '', '', '', value] for key, value in self._report['totals'].items()]
         for kind, label in [('daily', 'date'), ('monthly', 'month')]:
             rows += [[kind, r[label], '', r['bill_count'], '', r['revenue'], ''] for r in self._report[kind]]
-        rows += [['product', r['name'], r['category'], '', r['quantity'], r['revenue'], ''] for r in self._report['products']]
+        rows += [['product', r['name'], r['category'], '', r['quantity'], r['revenue'], '', r['brand']] for r in self._report['products']]
         rows += [['category', r['category'], '', '', r['quantity'], r['revenue'], ''] for r in self._report['categories']]
+        rows = [row + [''] if len(row) == 7 else row for row in rows]
+        rows += [['brand', r['brand'], r['category'], '', r['quantity'], r['revenue'], '', r['brand']] for r in self._report['brands']]
         export_csv(self, 'Export Statistics', 'statistics_export.csv',
-                   ['Section', 'Metric / Date / Name', 'Category / Period', 'Bills', 'Pieces', 'Revenue', 'Value'], rows)
+                   ['Section', 'Metric / Date / Name', 'Category / Period', 'Bills', 'Pieces', 'Revenue', 'Value', 'Brand / Style'], rows)

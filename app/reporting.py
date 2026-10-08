@@ -239,26 +239,32 @@ class ReportingQueries:
             rows = conn.execute(f"""
                 SELECT COALESCE(i.name,bi.item_name_snapshot) AS name,
                     COALESCE(c.name,bi.category_snapshot,'Uncategorised') AS category,
+                    COALESCE(NULLIF(TRIM(st.name),''), CASE WHEN i.id IS NULL
+                        THEN 'Unknown brand / style' ELSE 'No brand / style' END) AS brand,
                     SUM(bi.quantity) AS quantity,
                     SUM({cents('bi.subtotal')}+{cents('bi.gst_amount')}) AS revenue_cents
                 FROM report_bill_classes s JOIN bill_items bi ON bi.bill_id=s.id
                 LEFT JOIN items i ON i.id=bi.item_id LEFT JOIN categories c ON c.id=i.category_id
-                WHERE s.legacy=0 GROUP BY 1, 2""")
+                LEFT JOIN subtypes st ON st.id=i.subtype_id
+                WHERE s.legacy=0 GROUP BY 1, 2, 3""")
             for row in rows:
-                products[(row['name'],row['category'])] = dict(quantity=row['quantity'], cents=row['revenue_cents'])
+                products[(row['name'],row['category'],row['brand'])] = dict(quantity=row['quantity'], cents=row['revenue_cents'])
             legacy = conn.execute("""
                 SELECT s.id AS report_bill_id, s.total AS report_total, bi.*,
                     COALESCE(i.name,bi.item_name_snapshot,'Unspecified items') AS name,
-                    COALESCE(c.name,bi.category_snapshot,'Uncategorised') AS category
+                    COALESCE(c.name,bi.category_snapshot,'Uncategorised') AS category,
+                    COALESCE(NULLIF(TRIM(st.name),''), CASE WHEN i.id IS NULL
+                        THEN 'Unknown brand / style' ELSE 'No brand / style' END) AS brand
                 FROM report_bill_classes s LEFT JOIN bill_items bi ON bi.bill_id=s.id
                 LEFT JOIN items i ON i.id=bi.item_id LEFT JOIN categories c ON c.id=i.category_id
+                LEFT JOIN subtypes st ON st.id=i.subtype_id
                 WHERE s.legacy=1 ORDER BY s.id, bi.id""")
             for _, group in groupby(legacy, key=lambda r: r['report_bill_id']):
                 items = list(group)  # Bound memory to one historical bill.
                 total = money(items[0]['report_total'])
                 if items[0]['id'] is None:
                     if total:
-                        products[('Unspecified items','Uncategorised')]['cents'] += money_cents(total)
+                        products[('Unspecified items','Uncategorised','Unknown brand / style')]['cents'] += money_cents(total)
                     continue
                 weights = [max(Decimal(str(i['subtotal'])) + Decimal(str(i['gst_amount'] or 0)), 0) for i in items]
                 denominator = sum(weights)
@@ -274,7 +280,7 @@ class ReportingQueries:
                 for idx in sorted(range(len(shares)), key=lambda i: shares[i]-allocated[i], reverse=True)[:target-sum(allocated)]:
                     allocated[idx] += 1
                 for item, value in zip(items, allocated):
-                    data = products[(item['name'],item['category'])]
+                    data = products[(item['name'],item['category'],item['brand'])]
                     data['quantity'] += item['quantity']
                     data['cents'] += value
 
@@ -294,13 +300,18 @@ class ReportingQueries:
                       median_daily=statistics.median(values) if values else 0,
                       std_daily=statistics.pstdev(values) if values else 0, active_days=len(days))
         categories = defaultdict(lambda: {'quantity':0,'cents':0})
+        brands = defaultdict(lambda: {'quantity':0,'cents':0})
         product_rows = []
-        for (name,category), data in products.items():
-            product_rows.append(dict(name=name,category=category,quantity=data['quantity'],revenue=data['cents']/100))
+        for (name,category,brand), data in products.items():
+            product_rows.append(dict(name=name,category=category,brand=brand,quantity=data['quantity'],revenue=data['cents']/100))
             categories[category]['quantity'] += data['quantity']
             categories[category]['cents'] += data['cents']
+            brands[(category,brand)]['quantity'] += data['quantity']
+            brands[(category,brand)]['cents'] += data['cents']
         return dict(totals=totals, daily=daily,
                     monthly=[dict(month=m,revenue=d['cents']/100,bill_count=d['bill_count']) for m,d in sorted(months.items())],
-                    products=sorted(product_rows,key=lambda r:(-r['revenue'],r['name'],r['category'])),
+                    products=sorted(product_rows,key=lambda r:(-r['revenue'],r['name'],r['category'],r['brand'])),
+                    brands=sorted([dict(category=c,brand=b,quantity=d['quantity'],revenue=d['cents']/100)
+                                   for (c,b),d in brands.items()],key=lambda r:(-r['revenue'],r['category'],r['brand'])),
                     categories=sorted([dict(category=n,quantity=d['quantity'],revenue=d['cents']/100)
                                        for n,d in categories.items()],key=lambda r:(-r['revenue'],r['category'])))

@@ -153,6 +153,7 @@ class ReportingTests(unittest.TestCase):
         report = self.db.report_statistics('2022-01-01','2022-01-01')
         self.assertEqual(sum_money(r['revenue'] for r in report['products']), 2)
         self.assertEqual(sorted(r['revenue'] for r in report['products']), [.66,.67,.67])
+        self.assertEqual(report['brands'], [dict(category='Test', brand='Unknown brand / style', quantity=3, revenue=2)])
 
     def test_legacy_bill_without_lines_still_reconciles_chart(self):
         with self.db._conn() as conn:
@@ -161,6 +162,102 @@ class ReportingTests(unittest.TestCase):
         self.assertEqual(report['totals']['pieces'], 0)
         self.assertEqual(report['products'][0]['name'], 'Unspecified items')
         self.assertEqual(report['products'][0]['revenue'], 10)
+        self.assertEqual(report['brands'], [dict(category='Uncategorised', brand='Unknown brand / style', quantity=0, revenue=10)])
+
+    def brand_sales(self):
+        self.db.add_category('Brand test shirts')
+        self.db.add_category('Brand test trousers')
+        categories = {r['name']: r['id'] for r in self.db.get_categories()}
+        for category, brand, qty, total in (
+            ('Brand test shirts', 'CK', 3, 30),
+            ('Brand test shirts', 'Other', 1, 100),
+            ('Brand test trousers', 'CK', 2, 40),
+        ):
+            category_id = categories[category]
+            self.db.add_subtype(category_id, brand)
+            brand_id = next(r['id'] for r in self.db.get_subtypes(category_id) if r['name'] == brand)
+            iid = self.db.add_item('Same item name', category_id, brand_id, '', '', '', 100, 100)
+            self.db.save_bill(None, [dict(item_id=iid, name='Same item name', category=category,
+                quantity=qty, rate=total/qty, subtotal=total, gst_rate=0, gst_amount=0)],
+                total, 0, 0, total, 'Cash', '2025-02-01')
+
+    def test_brands_separate_same_named_items_and_categories_with_date_filters(self):
+        self.brand_sales()
+        report = self.db.report_statistics('2025-02-01', '2025-02-28')
+        expected = {('Brand test shirts', 'CK'): (3, 30),
+                    ('Brand test shirts', 'Other'): (1, 100),
+                    ('Brand test trousers', 'CK'): (2, 40)}
+        self.assertEqual(len(report['products']), 3)
+        for kind in ('products', 'brands'):
+            self.assertEqual({(r['category'], r['brand']): (r['quantity'], r['revenue'])
+                              for r in report[kind]}, expected)
+        for kind in ('products', 'brands', 'categories'):
+            self.assertEqual(sum_money(r['revenue'] for r in report[kind]), 170)
+            self.assertEqual(sum(r['quantity'] for r in report[kind]), 6)
+        self.assertEqual(report['totals']['revenue'], 170)
+        self.assertEqual(self.db.report_statistics('2025-03-01', '2025-03-31')['brands'], [])
+        self.assertEqual(self.db.report_statistics('2024-02-01', '2024-02-29')['brands'][0]['brand'],
+                         'No brand / style')
+
+    def test_brand_tables_chart_cached_ranking_and_csv(self):
+        self.brand_sales()
+        tab = self.tab(StatsTab)
+        self.month(tab, QDate(2025, 2, 1))
+        self.assertEqual(tab.top_items_table.columnCount(), 5)
+        self.assertEqual(tab.top_items_table.item(0, 2).text(), 'CK')
+        self.assertEqual(tab.top_items_table.item(0, 3).text(), '3')
+        self.assertEqual(tab.top_brands_table.rowCount(), 3)
+        self.assertEqual(tab.top_brands_table.item(0, 1).text(), 'CK')
+        with patch.object(self.db, 'report_statistics', side_effect=AssertionError('unexpected query')):
+            tab.top_items_sort_combo.setCurrentText('Revenue')
+            tab.chart_group.setCurrentText('Brands / Styles')
+        self.assertEqual(tab.top_brands_table.item(0, 1).text(), 'Other')
+        self.assertEqual(tab.top_items_table.item(0, 2).text(), 'Other')
+        legend = tab.category_figure.axes[0].get_legend()
+        self.assertTrue(any('Brand test shirts' in t.get_text() and 'Other' in t.get_text()
+                            for t in legend.get_texts()))
+        rows = self.export(tab)
+        self.assertEqual(rows[0][-1], 'Brand / Style')
+        self.assertTrue(all(len(r) == 8 for r in rows))
+        for kind in ('product', 'brand'):
+            selected = [r for r in rows if r[0] == kind]
+            self.assertEqual(len(selected), 3)
+            self.assertEqual(sum(float(r[5]) for r in selected), 170)
+            self.assertEqual({(r[2], r[7]) for r in selected},
+                             {('Brand test shirts', 'CK'), ('Brand test shirts', 'Other'),
+                              ('Brand test trousers', 'CK')})
+        self.month(tab, QDate(2025, 3, 1))
+        self.assertEqual(tab.top_brands_table.rowCount(), 0)
+        self.assertEqual(tab.top_items_table.rowCount(), 0)
+        self.assertEqual(len(tab.category_figure.axes[0].patches), 0)
+        self.month(tab, QDate(2025, 2, 1))
+        tab.period.blockSignals(True)
+        tab.period.preset.setCurrentText('Custom dates')
+        tab.period.date_from.setDate(QDate(2025, 3, 1))
+        tab.period.date_to.setDate(QDate(2025, 2, 1))
+        tab.period.blockSignals(False)
+        self.assertFalse(tab.refresh())
+        self.assertEqual(tab.top_brands_table.rowCount(), 0)
+        self.assertEqual(tab.top_items_table.rowCount(), 0)
+
+    def test_brand_csv_includes_groups_beyond_top_ten(self):
+        for index in range(12):
+            self.db.add_subtype(self.category['id'], f'Brand {index:02}')
+            brand_id = next(r['id'] for r in self.db.get_subtypes(self.category['id'])
+                            if r['name'] == f'Brand {index:02}')
+            iid = self.db.add_item(f'Item {index}', self.category['id'], brand_id, '', '', '', 100, 100)
+            self.db.save_bill(None, [dict(item_id=iid, name=f'Item {index}', category=self.category['name'],
+                quantity=1, rate=1, subtotal=1, gst_rate=0, gst_amount=0)],
+                1, 0, 0, 1, 'Cash', '2025-02-01')
+        tab = self.tab(StatsTab)
+        self.month(tab, QDate(2025, 2, 1))
+        self.assertEqual(tab.top_brands_table.rowCount(), 10)
+        self.assertEqual(tab.top_items_table.rowCount(), 10)
+        tab.chart_group.setCurrentText('Brands / Styles')
+        self.assertEqual(len(tab.category_figure.axes[0].patches), 9)
+        rows = self.export(tab)
+        self.assertEqual(len([r for r in rows if r[0] == 'brand']), 12)
+        self.assertEqual(len([r for r in rows if r[0] == 'product']), 12)
 
     def test_sales_filter_and_csv_share_month_custom_and_search(self):
         tab = self.tab(SalesTab)

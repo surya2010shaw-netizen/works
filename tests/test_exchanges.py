@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/os.environ.get('BILLING_APP_DIR','app')))
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 from PySide6.QtWidgets import QApplication,QMessageBox
+from money import sum_money
 from database import Database
 from access import AccessSession,RoleDatabase
 from exchanges_tab import ExchangeCart,ExchangesTab
@@ -101,6 +102,8 @@ class ExchangeTests(unittest.TestCase):
         self.assertEqual((totals['revenue'],totals['payments_collected'],totals['outstanding'],totals['pieces'],totals['bill_count']),
                          (210,210,0,0,1))
         self.assertEqual({r['name']:r['revenue'] for r in report['products']},{'Original jacket':-840,'New purchase':1050})
+        self.assertEqual(sum_money(r['revenue'] for r in report['brands']),210)
+        self.assertEqual(sum(r['quantity'] for r in report['brands']),0)
         report = self.db.report_statistics()
         self.assertEqual((report['totals']['revenue'],report['totals']['pieces']),(1050,1))
         self.assertEqual(sum(r['revenue'] for r in report['products']),1050)
@@ -108,6 +111,10 @@ class ExchangeTests(unittest.TestCase):
         self.addCleanup(tab.close)
         tab._report = self.db.report_statistics(today,today)
         tab._refresh_category_chart(today,today)
+        tab.chart_group.setCurrentText('Brands / Styles')
+        tab._refresh_top_items(today,today)
+        self.assertEqual(sum(float(tab.top_brands_table.item(row, 2).text())
+                             for row in range(tab.top_brands_table.rowCount())),0)
 
     def test_strict_higher_value_and_full_difference_rollback(self):
         bid,lid = self.sale()

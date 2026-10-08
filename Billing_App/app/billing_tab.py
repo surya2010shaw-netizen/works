@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QDateEdit,
 )
 from PySide6.QtCore import Qt, QDate
+from PySide6.QtGui import QStandardItem, QStandardItemModel
 
 from widgets import rupees, EditableSearchCombo, divider, make_heading
 from receipt import ReceiptDialog
@@ -394,12 +395,22 @@ class BillingTab(QWidget):
         self._on_category_changed()
 
     def _refresh_phone_completer(self):
-        if not self.session.is_admin:
-            return
-        phones = [c["phone"] for c in self.db.search_customers("") if c["phone"]]
-        completer = QCompleter(phones, self)
+        model = QStandardItemModel()
+        for customer in self.db.get_customer_phone_suggestions():
+            if customer["phone"]:
+                item = QStandardItem(f'{customer["phone"]} — {customer["name"]}')
+                item.setData(customer["phone"], Qt.UserRole)
+                model.appendRow(item)
+        completer = QCompleter(model, self)
+        model.setParent(completer)
+        completer.setCompletionRole(Qt.UserRole)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.activated[str].connect(self._select_customer_phone)
         self.phone_input.setCompleter(completer)
+
+    def _select_customer_phone(self, phone):
+        self.phone_input.setText(phone)
+        self._lookup_customer()
 
     def refresh_catalog(self):
         """Call after inventory changes elsewhere so combos/suggestions are current."""
@@ -848,6 +859,7 @@ class BillingTab(QWidget):
         wishlist_note = self.wishlist_input.text().strip()
 
         customer_id = None
+        customer_details = None
         if phone or name:
             if not name:
                 QMessageBox.warning(
@@ -856,15 +868,7 @@ class BillingTab(QWidget):
                     "Please enter the customer's name, or leave both name and phone blank for a walk-in sale.",
                 )
                 return
-            existing = self.db.get_customer_by_phone(phone) if phone else None
-            if existing:
-                customer_id = existing["id"]
-                if self.session.is_admin:
-                    self.db.update_customer(
-                        customer_id, name, phone, address, existing["notes"] or ""
-                    )
-            else:
-                customer_id = self.db.add_customer(name, phone, address, "")
+            customer_details = dict(name=name, phone=phone, address=address)
 
         subtotal = self._subtotal()
         discount_amount = self._total_discount()
@@ -923,6 +927,7 @@ class BillingTab(QWidget):
                 gst_amount,
                 paid_now,
                 "Initial payment",
+                customer_details=customer_details,
             )
         except Exception as exc:
             QMessageBox.critical(self, "Could not save bill", str(exc))
@@ -936,8 +941,8 @@ class BillingTab(QWidget):
             ("reset the bill form", self._clear_bill),
             ("clear customer details", self._clear_customer),
         ]
-        if self.session.is_admin and wishlist_note and customer_id:
-            actions.append(("save the customer request", lambda: self.db.add_wishlist(customer_id, wishlist_note)))
+        if self.session.is_admin and wishlist_note and customer_details:
+            actions.append(("save the customer request", lambda: self.db.add_wishlist(self.db.get_bill(bill_id)[0]['customer_id'], wishlist_note)))
         if self.on_bill_saved:
             actions.append(("refresh the screens", self.on_bill_saved))
         actions.append(("refresh customer suggestions", self._refresh_phone_completer))

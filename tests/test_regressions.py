@@ -11,13 +11,15 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = ROOT / os.environ.get('BILLING_APP_DIR', 'app')
 sys.path.insert(0, str(APP_DIR))
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PySide6.QtCore import QDate
+from PySide6.QtCore import QDate, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox, QFileDialog, QDialog
 from database import Database, SCHEMA
 from billing_tab import BillingTab
@@ -152,6 +154,83 @@ class RegressionTests(unittest.TestCase):
 
     def test_receipt_qr_is_present(self):
         self.assertFalse(_make_payment_qr_image({'bill_no':'TEST'}, 100).isNull())
+
+    def test_receipt_qr_contains_upi_recipient_and_invoice_amount(self):
+        import receipt
+        bill_no = 'INV-TEST & 1'
+        for amount in (1, 105.50, 2100.01):
+            with self.subTest(amount=amount):
+                qr = receipt.qrcode.QRCode()
+                with patch('receipt.qrcode.QRCode', return_value=qr):
+                    image = _make_payment_qr_image({'bill_no': bill_no}, amount)
+                self.assertFalse(image.isNull())
+                payload = b''.join(part.data for part in qr.data_list).decode('utf-8')
+                uri = urlsplit(payload)
+                self.assertEqual((uri.scheme, uri.netloc), ('upi', 'pay'))
+                self.assertEqual(parse_qs(uri.query), {
+                    'pa': ['9148783935.ibz@icici'],
+                    'pn': [receipt.SHOP_NAME],
+                    'am': [f'{amount:.2f}'],
+                    'cu': ['INR'],
+                    'tn': [f'Invoice {bill_no}'],
+                })
+        bill, lines = self.db.get_bill(self.sale()[0])
+        dialog = ReceiptDialog(bill, lines)
+        self.addCleanup(dialog.close)
+        self.assertIn('9148783935.ibz@icici', dialog.text_edit.toPlainText())
+
+    def test_admin_discounted_receipt_qr_uses_paid_now(self):
+        import receipt
+        for paid_now in (200, 700, 0):
+            with self.subTest(paid_now=paid_now):
+                tab = BillingTab(self.db, session=self.session)
+                self.addCleanup(tab.close)
+                tab._add_to_cart(None, 'Discounted item', 'Shirts', 1, 800, 0)
+                tab.cart_table.item(0, 5).setText('100')
+                tab.payment_amount_input.setValue(paid_now)
+                self.assertEqual(tab._grand_total(), 700)
+                codes = []
+                factory = receipt.qrcode.QRCode
+
+                def capture_qr(*args, **kwargs):
+                    code = factory(*args, **kwargs)
+                    codes.append(code)
+                    return code
+
+                with patch('receipt.qrcode.QRCode', side_effect=capture_qr), \
+                     patch.object(ReceiptDialog, 'exec', lambda self: QDialog.Accepted):
+                    tab._complete_bill()
+                dialog = tab.findChild(ReceiptDialog)
+                self.assertIsNotNone(dialog)
+                bill = dialog.bill_row
+                self.assertEqual((bill['total'], bill['paid_amount'], bill['balance']),
+                                 (700, paid_now, 700 - paid_now))
+                html = receipt.build_receipt_html(bill, dialog.bill_items)
+                if paid_now:
+                    self.assertEqual(len(codes), 1)
+                    payload = b''.join(part.data for part in codes[0].data_list).decode('utf-8')
+                    params = parse_qs(urlsplit(payload).query)
+                    self.assertEqual(params['am'], [f'{paid_now:.2f}'])
+                    self.assertEqual(params['pa'], ['9148783935.ibz@icici'])
+                    self.assertIn(f'<div class="qr-amount">₹{paid_now:.2f}</div>', html)
+                else:
+                    self.assertEqual(codes, [])
+                    self.assertNotIn('qr://invoice-payment', html)
+                    self.assertNotIn('SCAN TO PAY', dialog.text_edit.toPlainText())
+
+    def test_reprinted_receipt_qr_matches_recorded_payments(self):
+        import receipt
+        bid, _ = self.sale(paid=200, total=700, subtotal=700)
+        for expected, extra in ((200, 0), (350, 150)):
+            if extra:
+                self.db.add_payment(bid, extra)
+            bill, lines = self.db.get_bill(bid)
+            with patch('receipt._make_payment_qr_image', wraps=_make_payment_qr_image) as qr:
+                dialog = ReceiptDialog(bill, lines)
+            self.addCleanup(dialog.close)
+            qr.assert_called_once_with(bill, expected)
+            self.assertIn(f'<div class="qr-amount">₹{expected:.2f}</div>',
+                          receipt.build_receipt_html(bill, lines))
 
     def test_partial_payment_and_rounding_agree(self):
         tab = BillingTab(self.db, session=self.session)
@@ -360,6 +439,37 @@ class RegressionTests(unittest.TestCase):
             tab._complete_bill()
         self.assertEqual(self.db.get_customer_by_phone('222')['name'], 'B')
         self.assertEqual(self.db.get_customer_by_phone('111')['name'], 'A')
+
+    def test_phone_suggestions_show_customer_name_and_save_selected_identity(self):
+        cid = self.db.add_customer('Ravi', '910884773', 'Address Ravi')
+        self.db.add_customer('Ravi', '910885555', 'Other address')
+        self.db.add_customer('No phone', '')
+        tab = BillingTab(self.db, session=self.session)
+        self.addCleanup(tab.close)
+        tab.show()
+        tab.phone_input.setFocus()
+        QTest.keyClicks(tab.phone_input, '910884')
+        self.app.processEvents()
+        completer = tab.phone_input.completer()
+        self.assertEqual(completer.completionCount(), 1)
+        index = completer.completionModel().index(0, 0)
+        self.assertEqual(index.data(Qt.DisplayRole), '910884773 — Ravi')
+        self.assertEqual(completer.currentCompletion(), '910884773')
+        popup = completer.popup()
+        popup.setCurrentIndex(index)
+        QTest.keyClick(popup, Qt.Key_Return)
+        self.assertEqual(tab.phone_input.text(), '910884773')
+        self.assertEqual(tab.customer_name_input.text(), 'Ravi')
+        self.assertEqual(tab.customer_address_input.text(), 'Address Ravi')
+        self.assertEqual(tab.matched_customer['id'], cid)
+        tab._add_to_cart(None, 'Test', 'Shirts', 1, 100)
+        with patch('billing_tab.ReceiptDialog'):
+            tab._complete_bill()
+        self.assertEqual(self.db.search_bills()[0]['customer_id'], cid)
+        self.assertEqual(len(self.db.search_customers('')), 3)
+        refreshed = tab.phone_input.completer()
+        refreshed.setCompletionPrefix('91088')
+        self.assertEqual(refreshed.completionCount(), 2)
 
     def test_blank_phone_transition_and_new_manual_name(self):
         self.db.add_customer('A', '111', 'Address A')
