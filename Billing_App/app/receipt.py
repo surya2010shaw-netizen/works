@@ -54,10 +54,9 @@ SHOP_PHONE = "6360086532"
 # ============================================================
 # UPI PAYMENT QR
 # ============================================================
-# The QR uses a UPI VPA. For a PhonePe number-based VPA this is
-# commonly 9008080213@ybl, but verify the actual VPA on the
-# receiving PhonePe account and change this value if needed.
-UPI_ID = "9008080213@ybl"
+# Standard UPI payment QR for compatible apps such as PhonePe,
+# Google Pay and Paytm. The invoice amount is included in the URI.
+UPI_ID = "9148783935.ibz@icici"
 UPI_PAYEE_NAME = SHOP_NAME
 
 
@@ -266,7 +265,7 @@ def _make_payment_qr_image(bill_row, total):
         version=None,
         error_correction=qrcode.constants.ERROR_CORRECT_M,
         box_size=8,
-        border=3,
+        border=4,  # Standard four-module quiet zone for reliable scanning.
     )
     qr.add_data(payload)
     qr.make(fit=True)

@@ -11,6 +11,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = ROOT / os.environ.get('BILLING_APP_DIR', 'app')
@@ -152,6 +153,30 @@ class RegressionTests(unittest.TestCase):
 
     def test_receipt_qr_is_present(self):
         self.assertFalse(_make_payment_qr_image({'bill_no':'TEST'}, 100).isNull())
+
+    def test_receipt_qr_contains_upi_recipient_and_invoice_amount(self):
+        import receipt
+        bill_no = 'INV-TEST & 1'
+        for amount in (1, 105.50, 2100.01):
+            with self.subTest(amount=amount):
+                qr = receipt.qrcode.QRCode()
+                with patch('receipt.qrcode.QRCode', return_value=qr):
+                    image = _make_payment_qr_image({'bill_no': bill_no}, amount)
+                self.assertFalse(image.isNull())
+                payload = b''.join(part.data for part in qr.data_list).decode('utf-8')
+                uri = urlsplit(payload)
+                self.assertEqual((uri.scheme, uri.netloc), ('upi', 'pay'))
+                self.assertEqual(parse_qs(uri.query), {
+                    'pa': ['9148783935.ibz@icici'],
+                    'pn': [receipt.SHOP_NAME],
+                    'am': [f'{amount:.2f}'],
+                    'cu': ['INR'],
+                    'tn': [f'Invoice {bill_no}'],
+                })
+        bill, lines = self.db.get_bill(self.sale()[0])
+        dialog = ReceiptDialog(bill, lines)
+        self.addCleanup(dialog.close)
+        self.assertIn('9148783935.ibz@icici', dialog.text_edit.toPlainText())
 
     def test_partial_payment_and_rounding_agree(self):
         tab = BillingTab(self.db, session=self.session)
