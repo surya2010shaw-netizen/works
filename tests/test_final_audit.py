@@ -13,12 +13,15 @@ from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/os.environ.get('BILLING_APP_DIR','app')))
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication,QMessageBox
 from database import Database
 from access import AccessSession,RoleDatabase
 from billing_tab import BillingTab
 from balances_tab import ReceivePaymentDialog
 from money import sum_money
+from customers_tab import CustomersTab
+from inventory_tab import InventoryTab
 
 
 class FinalAuditTests(unittest.TestCase):
@@ -109,6 +112,85 @@ class FinalAuditTests(unittest.TestCase):
         saved=self.db.search_bills()[0]
         self.assertEqual(saved['total'],1050.20)
         self.assertEqual(self.db.report_statistics()['totals']['revenue'],1050.20)
+
+    def test_failed_bill_rolls_back_new_and_existing_customer_changes(self):
+        iid = self.db.add_item('Atomic item', self.category, None, '', '', '', 100, 20)
+        with self.db._conn() as conn:
+            conn.execute("CREATE TRIGGER reject_bill BEFORE INSERT ON bills BEGIN SELECT RAISE(ABORT, 'forced save failure'); END")
+        for phone, name in [('456', 'New customer'), ('123', 'Changed profile')]:
+            with self.subTest(phone=phone):
+                tab = self.tab()
+                tab._add_to_cart(iid, 'Atomic item', 'Category', 1, 100, 5)
+                tab.phone_input.setText(phone)
+                tab.customer_name_input.setText(name)
+                tab.customer_address_input.setText('New address')
+                with patch.object(QMessageBox, 'critical') as error:
+                    tab._complete_bill()
+                error.assert_called_once()
+                self.assertEqual(len(tab.cart), 1)
+                self.assertEqual(self.db.search_bills(), [])
+                self.assertIsNone(self.db.get_customer_by_phone('456'))
+                existing = self.db.get_customer_by_phone('123')
+                self.assertEqual((existing['name'], existing['address']), ('Example', ''))
+                self.assertEqual(self.db.get_item_by_id(iid)['stock_qty'], 20)
+
+    def test_customer_write_failure_is_reported_and_bill_draft_survives(self):
+        tab = self.tab()
+        tab._add_to_cart(None, 'Manual item', 'Category', 1, 100, 5)
+        tab.phone_input.setText('456')
+        tab.customer_name_input.setText('New customer')
+        with self.db._conn() as conn:
+            conn.execute("CREATE TRIGGER reject_customer BEFORE INSERT ON customers BEGIN SELECT RAISE(ABORT, 'customer write failed'); END")
+        with patch.object(QMessageBox, 'critical') as error:
+            tab._complete_bill()
+        error.assert_called_once()
+        self.assertEqual(len(tab.cart), 1)
+        self.assertEqual(self.db.search_bills(), [])
+        self.assertIsNone(self.db.get_customer_by_phone('456'))
+
+    def test_customer_edit_preserves_notes_that_are_not_on_the_form(self):
+        self.db.update_customer(self.cid, 'Example', '123', 'Address', 'Keep these notes')
+        tab = CustomersTab(self.access)
+        self.addCleanup(tab.close)
+        tab.selected_customer_id = self.cid
+        tab._load_customer(self.cid)
+        tab.name_input.setText('Updated customer')
+        tab._save_customer_details()
+        row = self.db.get_customer_by_id(self.cid)
+        self.assertEqual((row['name'], row['notes']), ('Updated customer', 'Keep these notes'))
+
+    def test_duplicate_catalog_renames_report_errors_without_losing_selection(self):
+        tab = InventoryTab(self.access)
+        self.addCleanup(tab.close)
+        categories = self.db.get_categories()
+        chosen, other = categories[:2]
+        tab._refresh_categories(select_id=chosen['id'])
+        with patch('inventory_tab.QInputDialog.getText', return_value=(other['name'], True)), \
+             patch.object(QMessageBox, 'warning') as warning:
+            tab._rename_category()
+        warning.assert_called_once()
+        self.assertEqual(tab.category_list.currentItem().data(Qt.UserRole), chosen['id'])
+        self.db.add_subtype(chosen['id'], 'CK')
+        self.db.add_subtype(chosen['id'], 'Other')
+        brand = next(r for r in self.db.get_subtypes(chosen['id']) if r['name'] == 'CK')
+        tab._refresh_subtypes(select_id=brand['id'])
+        with patch('inventory_tab.QInputDialog.getText', return_value=('Other', True)), \
+             patch.object(QMessageBox, 'warning') as warning:
+            tab._rename_subtype()
+        warning.assert_called_once()
+        self.assertEqual(tab.subtype_list.currentItem().text(), 'CK')
+
+    def test_whole_database_csv_escapes_customer_formulas(self):
+        if not hasattr(self.db, 'export_all_tables_csv'):
+            self.skipTest('Whole database export exists in recommended copy only')
+        self.db.update_customer(self.cid, '=1+1', '+123', '@Address', '-Notes')
+        self.db.export_all_tables_csv(str(self.path / 'formulas'))
+        with (self.path / 'formulas/customers.csv').open(newline='') as stream:
+            row = next(csv.DictReader(stream))
+        self.assertEqual(row['name'], "'=1+1")
+        self.assertEqual(row['phone'], "'+123")
+        self.assertEqual(row['address'], "'@Address")
+        self.assertEqual(row['notes'], "'-Notes")
 
     def test_repeated_backup_never_overwrites_previous_copy(self):
         if not hasattr(self.db,'backup_database'):self.skipTest('Backup exists in recommended copy only')
