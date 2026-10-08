@@ -15,6 +15,11 @@ The admin password configured for this release also authorizes deletion confirma
 The local application access gate does not replace Windows account/file permissions
 for protecting the SQLite database or preventing edits to the program itself.
 
+The receipt's UPI QR uses the recorded payment amount. For example, a ₹700 bill
+with **Paid now** set to ₹200 generates a ₹200 QR and shows ₹500 outstanding.
+The QR caption shows the same payment amount. A fully credit bill (₹0 paid) has
+no payment QR. Reopening a receipt uses its current total recorded payments.
+
 ## Windows: install and build
 
 1. Install **standard 64-bit Python 3.13** from [python.org](https://www.python.org/downloads/windows/), including the Python launcher. Supported: Windows 10/11 x64, CPython 3.10–3.14. Free-threaded Python, 32-bit Python and ARM64 Python are not supported by this build path.

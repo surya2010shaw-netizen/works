@@ -55,7 +55,7 @@ SHOP_PHONE = "6360086532"
 # UPI PAYMENT QR
 # ============================================================
 # Standard UPI payment QR for compatible apps such as PhonePe,
-# Google Pay and Paytm. The invoice amount is included in the URI.
+# Google Pay and Paytm. The recorded payment amount is included in the URI.
 UPI_ID = "9148783935.ibz@icici"
 UPI_PAYEE_NAME = SHOP_NAME
 
@@ -243,7 +243,7 @@ def _balance_amount(bill_row):
 
 
 def _upi_payment_uri(bill_row, total):
-    """Build a standard UPI payment URI with the invoice amount."""
+    """Build a standard UPI payment URI with the supplied payment amount."""
     bill_no = str(_value(bill_row, "bill_no", "invoice") or "invoice")
     params = {
         "pa": UPI_ID,
@@ -322,6 +322,15 @@ def build_receipt_html(bill_row, bill_items):
 
     paid_amount = _paid_amount(bill_row)
     balance_amount = _balance_amount(bill_row)
+    # Use the recorded payment (Paid now on a new bill), not the invoice total.
+    # A fully credit sale has no payment to collect through a QR yet.
+    payment_qr_html = (
+        f'<img src="qr://invoice-payment" width="88" height="88">'
+        f'<div class="qr-title">SCAN TO PAY</div>'
+        f'<div class="qr-amount">{_money(paid_amount)}</div>'
+        f'<div class="qr-upi">{escape(UPI_ID)}</div>'
+        if paid_amount > 0 else '<div class="qr-title">No payment recorded</div>'
+    )
 
     # Intra-state Karnataka sale: 5% GST -> 2.5% CGST + 2.5% SGST.
     cgst_rate = gst_rate / 2 if gst_rate else 0.0
@@ -959,10 +968,7 @@ table {{
             </td>
 
             <td class="qr-cell">
-                <img src="qr://invoice-payment" width="88" height="88">
-                <div class="qr-title">SCAN TO PAY</div>
-                <div class="qr-amount">{_money(total)}</div>
-                <div class="qr-upi">{escape(UPI_ID)}</div>
+                {payment_qr_html}
             </td>
         </tr>
     </table>
@@ -1126,16 +1132,15 @@ class ReceiptDialog(QDialog):
 
         # Register the bill-specific UPI QR as a document resource so it
         # prints correctly in both the A4 printer output and saved PDF.
-        qr_image = _make_payment_qr_image(
-            bill_row,
-            _value(bill_row, "total", 0),
-        )
-        if not qr_image.isNull():
-            document.addResource(
-                QTextDocument.ImageResource,
-                QUrl("qr://invoice-payment"),
-                qr_image,
-            )
+        paid_amount = _paid_amount(bill_row)
+        if paid_amount > 0:
+            qr_image = _make_payment_qr_image(bill_row, paid_amount)
+            if not qr_image.isNull():
+                document.addResource(
+                    QTextDocument.ImageResource,
+                    QUrl("qr://invoice-payment"),
+                    qr_image,
+                )
 
         document.setHtml(
             build_receipt_html(bill_row, bill_items)

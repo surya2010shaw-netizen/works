@@ -178,6 +178,59 @@ class RegressionTests(unittest.TestCase):
         self.addCleanup(dialog.close)
         self.assertIn('9148783935.ibz@icici', dialog.text_edit.toPlainText())
 
+    def test_admin_discounted_receipt_qr_uses_paid_now(self):
+        import receipt
+        for paid_now in (200, 700, 0):
+            with self.subTest(paid_now=paid_now):
+                tab = BillingTab(self.db, session=self.session)
+                self.addCleanup(tab.close)
+                tab._add_to_cart(None, 'Discounted item', 'Shirts', 1, 800, 0)
+                tab.cart_table.item(0, 5).setText('100')
+                tab.payment_amount_input.setValue(paid_now)
+                self.assertEqual(tab._grand_total(), 700)
+                codes = []
+                factory = receipt.qrcode.QRCode
+
+                def capture_qr(*args, **kwargs):
+                    code = factory(*args, **kwargs)
+                    codes.append(code)
+                    return code
+
+                with patch('receipt.qrcode.QRCode', side_effect=capture_qr), \
+                     patch.object(ReceiptDialog, 'exec', lambda self: QDialog.Accepted):
+                    tab._complete_bill()
+                dialog = tab.findChild(ReceiptDialog)
+                self.assertIsNotNone(dialog)
+                bill = dialog.bill_row
+                self.assertEqual((bill['total'], bill['paid_amount'], bill['balance']),
+                                 (700, paid_now, 700 - paid_now))
+                html = receipt.build_receipt_html(bill, dialog.bill_items)
+                if paid_now:
+                    self.assertEqual(len(codes), 1)
+                    payload = b''.join(part.data for part in codes[0].data_list).decode('utf-8')
+                    params = parse_qs(urlsplit(payload).query)
+                    self.assertEqual(params['am'], [f'{paid_now:.2f}'])
+                    self.assertEqual(params['pa'], ['9148783935.ibz@icici'])
+                    self.assertIn(f'<div class="qr-amount">₹{paid_now:.2f}</div>', html)
+                else:
+                    self.assertEqual(codes, [])
+                    self.assertNotIn('qr://invoice-payment', html)
+                    self.assertNotIn('SCAN TO PAY', dialog.text_edit.toPlainText())
+
+    def test_reprinted_receipt_qr_matches_recorded_payments(self):
+        import receipt
+        bid, _ = self.sale(paid=200, total=700, subtotal=700)
+        for expected, extra in ((200, 0), (350, 150)):
+            if extra:
+                self.db.add_payment(bid, extra)
+            bill, lines = self.db.get_bill(bid)
+            with patch('receipt._make_payment_qr_image', wraps=_make_payment_qr_image) as qr:
+                dialog = ReceiptDialog(bill, lines)
+            self.addCleanup(dialog.close)
+            qr.assert_called_once_with(bill, expected)
+            self.assertIn(f'<div class="qr-amount">₹{expected:.2f}</div>',
+                          receipt.build_receipt_html(bill, lines))
+
     def test_partial_payment_and_rounding_agree(self):
         tab = BillingTab(self.db, session=self.session)
         tab._add_to_cart(None, 'Small item', 'Shirts', 1, 1.31)
