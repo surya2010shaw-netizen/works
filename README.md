@@ -7,8 +7,8 @@ automatic admin-defined offers, quantities, customer details, full payment and r
 amount due using the existing calculation: a ₹100 price with 5% GST totals ₹105.
 
 **Admin login** unlocks exchanges, offers, manual discounts, partial payments, credit, inventory, customers,
-balances, expenses, sales history, statistics, and the backup/export tools available
-in the recommended copy. **Lock admin / Employee mode** clears the unfinished bill
+balances, expenses, sales history, statistics, backup and update buttons. The recommended copy also has whole-database
+CSV export. **Lock** clears the unfinished bill
 and returns to employee access. Restarting always begins in Employee mode.
 
 In both Employee and Admin billing, typing a phone number shows matching
@@ -23,6 +23,43 @@ The receipt's UPI QR uses the recorded payment amount. For example, a ₹700 bil
 with **Paid now** set to ₹200 generates a ₹200 QR and shows ₹500 outstanding.
 The QR caption shows the same payment amount. A fully credit bill (₹0 paid) has
 no payment QR. Reopening a receipt uses its current total recorded payments.
+
+## Screen sizes, printing, backup and updates
+
+Billing uses two columns on wide screens. On smaller windows, switch between
+**Customer / Add items** and **Bill**; adding an item brings the bill forward.
+The Bill view has its own barcode field for repeated scanning.
+The cart uses the remaining height, payment fields scroll when needed, and
+**Complete Bill** stays visible. Management pages can scroll in smaller windows.
+Admin controls share the tab row instead of taking a separate row.
+
+Receipts open within the screen's usable area. **Print A4**, **Save PDF** and
+**Close** stay outside the scrolling preview. Print opens a printer chooser with
+copies; install the printer's Windows driver if no printer is listed. Failed
+jobs show an error. If a submitted job does not reach paper, check the Windows
+print queue, connection and printer status.
+
+In Admin mode, **Backup** lets you choose a folder for a complete SQLite `.db`
+backup. It includes customers, bills, payments, inventory and all other tables,
+using SQLite's online backup operation while the app is open. Both app copies
+provide this button; copies have unique names and do not overwrite each other.
+
+**Update** checks the checkout's current remote tracking branch. Choose
+**Back up, update and rebuild** to close billing, fast-forward that same branch,
+build a new executable in a staging folder and reopen it. Git for Windows,
+standard supported Python and an internet connection are required. Local edits,
+local-only commits and divergent history stop the update. The previous executable
+is retained if building fails, and a successful update keeps
+`ClothShopBilling.previous.exe` alongside the new executable. A failed build may
+leave the source checkout updated; retry Update to rebuild, or use the previous
+executable. Build details are in the app folder's `setup.log`.
+
+Run the executable from `app/dist` or `Billing_App/app/dist` inside its complete
+Git clone so Update can locate it. A detached executable or ZIP copy needs a Git
+clone first. **Existing installations need one initial pull and rebuild to get
+these buttons.** After that, use Update; manually deleting the executable is not
+required. Complete or clear unfinished bills before updating. The updater takes
+a database backup before closing and keeps the database in the same user profile.
 
 ## Windows: install and build
 
@@ -41,7 +78,7 @@ data, and builds the executable. It does not install into your global Python or
 require Administrator access. Keep using the same shop Windows account: its data
 lives at `%USERPROFILE%\.cloth_shop_billing\cloth_shop.db`.
 
-After pulling updates, close the running billing executable and run setup again.
+For a manual update, pull changes, close the running billing executable and run setup again.
 The app environment is reused when healthy and repaired when the selected Python
 changes. Old generated build files and Python caches do not belong in Git.
 

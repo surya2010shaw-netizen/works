@@ -20,6 +20,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 from PySide6.QtGui import QIcon
+from PySide6.QtCore import Qt
+from window_utils import fit_window, scroll_page
+from maintenance import backup_now, UpdateDialog
 
 from database import Database
 from access import AccessSession, RoleDatabase
@@ -63,22 +66,30 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         self.setCentralWidget(central)
 
-        access_bar = QHBoxLayout()
-        access_bar.setContentsMargins(16, 10, 16, 10)
-        access_bar.addStretch()
-        self.admin_button = QPushButton("Admin login")
-        self.admin_button.clicked.connect(self._login_admin)
-        access_bar.addWidget(self.admin_button)
-        self.logout_button = QPushButton("Lock admin / Employee mode")
-        self.logout_button.clicked.connect(self._logout_admin)
-        access_bar.addWidget(self.logout_button)
-        layout.addLayout(access_bar)
-
         self.tabs = QTabWidget()
+        self.tabs.setUsesScrollButtons(True)
         layout.addWidget(self.tabs)
+        controls = QWidget()
+        access_bar = QHBoxLayout(controls)
+        access_bar.setContentsMargins(4, 0, 4, 0)
+        access_bar.setSpacing(4)
+        self.admin_button = QPushButton("Admin")
+        self.admin_button.clicked.connect(self._login_admin)
+        self.logout_button = QPushButton("Lock")
+        self.logout_button.setToolTip("Lock admin and return to employee billing")
+        self.logout_button.clicked.connect(self._logout_admin)
+        self.backup_button = QPushButton("Backup")
+        self.backup_button.clicked.connect(lambda: backup_now(self, self.db))
+        self.update_button = QPushButton("Update")
+        self.update_button.clicked.connect(self._update_app)
+        for button in (self.admin_button, self.backup_button, self.update_button, self.logout_button):
+            button.setProperty("compact", "true")
+            access_bar.addWidget(button)
+        self.tabs.setCornerWidget(controls, Qt.TopRightCorner)
 
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self._build_dashboard()
+        fit_window(self, 1300, 820)
 
     def _build_dashboard(self):
         self.tabs.blockSignals(True)
@@ -113,11 +124,17 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(self.exchanges_tab, "Exchanges")
             self.tabs.addTab(self.employees_tab, "Employees")
 
+        for index in range(1, self.tabs.count()):
+            widget = self.tabs.widget(index)
+            if widget is not self.stats_tab:
+                scroll_page(widget)
         self.tabs.setCurrentIndex(0)
         self.tabs.blockSignals(False)
         admin = self.session.is_admin
         self.admin_button.setVisible(not admin)
         self.logout_button.setVisible(admin)
+        self.backup_button.setVisible(admin)
+        self.update_button.setVisible(admin)
         self.setWindowTitle("Cloth Shop Billing System — " + ("Admin" if admin else "Employee"))
 
     def _login_admin(self):
@@ -139,6 +156,14 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Incorrect password", "Admin access was not unlocked.")
             return
         self._build_dashboard()
+
+    def _update_app(self):
+        if not self.session.is_admin:
+            return
+        if self.billing_tab.cart:
+            QMessageBox.information(self, "Finish the bill", "Complete or clear the current bill before updating.")
+            return
+        UpdateDialog(self.db, self).exec()
 
     def _logout_admin(self):
         # Clear privileged widgets and unfinished discounted/credit bills on lock.

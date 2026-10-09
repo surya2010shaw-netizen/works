@@ -121,3 +121,18 @@ files created in the same second; and whole-database CSV consistency during a
 concurrent sale. Backup and whole-database export cases run only for the
 recommended copy that provides those features. The concurrency payment test
 instruments the payment read without depending on a specific aggregate name.
+
+## Adaptive desktop and updater checks
+
+`test_desktop_adaptive.py` runs a fresh production-theme process at 640×480,
+800×600, 1024×600, 1366×768 and 1920×1080. It checks populated employee/admin
+bills, discount controls, receipt button visibility, repeated barcode scans,
+explicit printer selection, error handling and backup integrity. Print actions
+use a PDF device; physical printers still require Windows verification.
+
+`test_updater.py` creates local temporary Git remotes and synthetic build outputs
+to check branch-preserving fast-forwards, dirty/divergent checkout rejection,
+helper startup and staging/replacement failures. `test_windows_setup.py` checks
+that staging leaves the installed executable intact. Windows process waiting,
+actual executable rebuilding/replacement/relaunch and printer drivers require
+a native Windows check; these platform-independent tests do not establish that.

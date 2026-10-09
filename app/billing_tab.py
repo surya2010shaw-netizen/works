@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
     QCompleter,
     QScrollArea,
     QDateEdit,
+    QTabWidget,
+    QSizePolicy,
 )
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QStandardItem, QStandardItemModel
@@ -69,6 +71,12 @@ class BillingTab(QWidget):
         self.rate_input.setReadOnly(not admin)
         self.bill_date_input.setEnabled(admin)
         self.wishlist_input.setVisible(admin)
+        self.payment_form.setRowVisible(self.payment_amount_input, admin)
+        self.payment_form.setRowVisible(self.balance_label, admin)
+        for index in range(self.date_row.count()):
+            widget = self.date_row.itemAt(index).widget()
+            if widget:
+                widget.setVisible(admin)
         for field in (self.size_input, self.color_input, self.new_barcode_input):
             field.setReadOnly(not admin)
         if not admin:
@@ -78,49 +86,61 @@ class BillingTab(QWidget):
     # ------------------------------------------------------------- UI setup
     def _build_ui(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 16, 16, 16)
-        outer.setSpacing(12)
-
-        outer.addWidget(
-            make_heading("New Bill", "Scan a barcode or enter items manually")
-        )
-
-        content = QHBoxLayout()
-        content.setSpacing(14)
-        outer.addLayout(content, 1)
-
-        # ---------------- LEFT column: customer + item entry ----------------
-        # Wrapped in a scroll area: on a shorter window (or a screen where
-        # the taskbar eats into the usable height), the Customer + Add Item
-        # boxes together can be taller than the visible area. Without a
-        # scroll area the bottom of the Add Item box -- including the
-        # "+ Add to Bill" button -- becomes unreachable.
-        left = QVBoxLayout()
-        left.setSpacing(12)
-        left_widget = QWidget()
-        left_widget.setLayout(left)
-
-        left_scroll = QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_scroll.setWidget(left_widget)
-        left_scroll.setMaximumWidth(450)
-        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        left_scroll.setStyleSheet(
-            "QScrollArea { border: none; background: transparent; }"
-        )
-        content.addWidget(left_scroll)
-
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(6)
+        self.content = QHBoxLayout()
+        self.content.setSpacing(8)
+        outer.addLayout(self.content, 1)
+        self.entry_scroll = QScrollArea()
+        self.entry_scroll.setWidgetResizable(True)
+        self.entry_scroll.setMinimumWidth(0)
+        self.entry_scroll.setStyleSheet("QScrollArea { border: none; }")
+        entry = QWidget()
+        left = QVBoxLayout(entry)
+        left.setContentsMargins(0, 0, 0, 0)
+        left.setSpacing(6)
         left.addWidget(self._build_customer_box())
         left.addWidget(self._build_item_entry_box())
         left.addStretch()
-
-        # ---------------- RIGHT column: cart + totals ----------------
-        right = QVBoxLayout()
-        right.setSpacing(12)
-        content.addLayout(right, 1)
-
+        self.entry_scroll.setWidget(entry)
+        self.bill_panel = QWidget()
+        self.bill_panel.setMinimumWidth(0)
+        right = QVBoxLayout(self.bill_panel)
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(6)
         right.addWidget(self._build_cart_box(), 1)
         right.addWidget(self._build_totals_box())
+        self.compact_tabs = QTabWidget()
+        self.compact_tabs.setDocumentMode(True)
+        self.compact_tabs.hide()
+        self.content.addWidget(self.entry_scroll, 2)
+        self.content.addWidget(self.bill_panel, 3)
+        self.content.addWidget(self.compact_tabs)
+        self._compact = False
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        budget = max(60, min(170, self.height() // 4))
+        self.payment_scroll.setMaximumHeight(min(max(38, self.payment_fields.sizeHint().height()+2), budget))
+        compact = self.width() < 1050
+        if compact == self._compact:
+            return
+        self._compact = compact
+        if compact:
+            self.content.removeWidget(self.entry_scroll)
+            self.content.removeWidget(self.bill_panel)
+            self.compact_tabs.addTab(self.entry_scroll, "Customer / Add items")
+            self.compact_tabs.addTab(self.bill_panel, "Bill")
+            self.compact_tabs.setCurrentIndex(1 if self.cart else 0)
+            self.compact_tabs.show()
+        else:
+            self.compact_tabs.removeTab(1)
+            self.compact_tabs.removeTab(0)
+            self.compact_tabs.hide()
+            self.content.insertWidget(0, self.entry_scroll, 2)
+            self.content.insertWidget(1, self.bill_panel, 3)
+            self.entry_scroll.show()
+            self.bill_panel.show()
 
     def _build_customer_box(self):
         box = QGroupBox("Customer")
@@ -241,7 +261,10 @@ class BillingTab(QWidget):
         v = QVBoxLayout(box)
 
         toggle_row = QHBoxLayout()
-        toggle_row.addStretch()
+        self.quick_barcode_input = QLineEdit()
+        self.quick_barcode_input.setPlaceholderText("Scan barcode + Enter")
+        self.quick_barcode_input.returnPressed.connect(self._scan_from_bill)
+        toggle_row.addWidget(self.quick_barcode_input, 1)
         self.discount_arrow_btn = QPushButton("\u25b8 Discount")
         self.discount_arrow_btn.setProperty("role", "secondary")
         self.discount_arrow_btn.setToolTip("Show/hide per-item discount")
@@ -250,6 +273,8 @@ class BillingTab(QWidget):
         v.addLayout(toggle_row)
 
         self.cart_table = QTableWidget(0, 6)
+        self.cart_table.setMinimumSize(0, 100)
+        self.cart_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         self.cart_table.setHorizontalHeaderLabels(
             ["Item", "Category", "Qty", "Rate", "Amount", "Discount"]
         )
@@ -261,7 +286,7 @@ class BillingTab(QWidget):
         self.cart_table.setAlternatingRowColors(True)
         self.cart_table.setColumnHidden(5, True)  # Discount column hidden until toggled
         self.cart_table.itemChanged.connect(self._on_cart_item_changed)
-        v.addWidget(self.cart_table)
+        v.addWidget(self.cart_table, 1)
 
         return box
 
@@ -270,43 +295,53 @@ class BillingTab(QWidget):
         box.setProperty("role", "card")
         v = QVBoxLayout(box)
 
-        self.subtotal_label = QLabel("Subtotal (before discount): Rs. 0.00")
-        v.addWidget(self.subtotal_label)
+        v.setContentsMargins(8, 6, 8, 6)
+        v.setSpacing(4)
+        summary = QHBoxLayout()
+        self.subtotal_label = QLabel("Subtotal: Rs. 0.00")
+        self.gst_label = QLabel("GST: Rs. 0.00")
+        summary.addWidget(self.subtotal_label)
+        summary.addStretch()
+        summary.addWidget(self.gst_label)
+        v.addLayout(summary)
         self.offer_savings_label = QLabel()
         self.offer_savings_label.setWordWrap(True)
         self.offer_savings_label.setTextFormat(Qt.PlainText)
         v.addWidget(self.offer_savings_label)
-        refresh_offers = QPushButton('Refresh offers')
-        refresh_offers.setProperty('role', 'secondary')
-        refresh_offers.clicked.connect(self._refresh_offers)
-        v.addWidget(refresh_offers)
-
         self.discount_total_row = QWidget()
         dt_row = QHBoxLayout(self.discount_total_row)
         dt_row.setContentsMargins(0, 0, 0, 0)
         self.discount_total_label = QLabel("Total discount given: -Rs. 0.00")
         self.discount_total_label.setStyleSheet("color: #c0392b;")
         dt_row.addWidget(self.discount_total_label)
-        dt_row.addStretch()
-        self.discount_total_row.setVisible(False)
-        v.addWidget(self.discount_total_row)
-
         self.taxable_label = QLabel("Taxable amount: Rs. 0.00")
-        v.addWidget(self.taxable_label)
-
-        self.gst_label = QLabel("GST (included in total): Rs. 0.00")
-        v.addWidget(self.gst_label)
-
-        v.addWidget(divider())
-
-        row_total = QHBoxLayout()
-        row_total.addStretch()
+        dt_row.addWidget(self.taxable_label)
+        self.discount_total_row.hide()
+        v.addWidget(self.discount_total_row)
+        total_row = QHBoxLayout()
         self.total_label = QLabel("Total to Pay: Rs. 0.00")
         self.total_label.setProperty("role", "total")
-        row_total.addWidget(self.total_label)
-        v.addLayout(row_total)
+        self.total_label.setWordWrap(True)
+        total_row.addWidget(self.total_label, 1)
+        refresh_offers = QPushButton('Refresh offers')
+        refresh_offers.setProperty('compact', 'true')
+        refresh_offers.setProperty('role', 'secondary')
+        refresh_offers.clicked.connect(self._refresh_offers)
+        total_row.addWidget(refresh_offers)
+        v.addLayout(total_row)
 
-        payment_form = QFormLayout()
+        self.payment_fields = QWidget()
+        payment_layout = QVBoxLayout(self.payment_fields)
+        payment_layout.setContentsMargins(0, 0, 0, 0)
+        payment_layout.setSpacing(4)
+        self.payment_scroll = QScrollArea()
+        self.payment_scroll.setWidgetResizable(True)
+        self.payment_scroll.setWidget(self.payment_fields)
+        self.payment_scroll.setStyleSheet("QScrollArea { border: none; }")
+        self.payment_scroll.setMinimumHeight(38)
+        self.payment_scroll.setMaximumHeight(170)
+        v.addWidget(self.payment_scroll)
+        payment_form = self.payment_form = QFormLayout()
         payment_form.setSpacing(8)
 
         self.payment_amount_input = QDoubleSpinBox()
@@ -320,7 +355,7 @@ class BillingTab(QWidget):
         self.balance_label = QLabel("Balance: Rs. 0.00")
         self.balance_label.setStyleSheet("font-weight: 600;")
         payment_form.addRow("Outstanding:", self.balance_label)
-        v.addLayout(payment_form)
+        payment_layout.addLayout(payment_form)
 
         row3 = QHBoxLayout()
         row3.addWidget(QLabel("Payment mode:"))
@@ -328,9 +363,9 @@ class BillingTab(QWidget):
         self.payment_mode_combo.addItems(["Cash", "Card", "UPI", "Other"])
         row3.addWidget(self.payment_mode_combo)
         row3.addStretch()
-        v.addLayout(row3)
+        payment_layout.addLayout(row3)
 
-        date_row = QHBoxLayout()
+        date_row = self.date_row = QHBoxLayout()
         date_row.addWidget(QLabel("Bill date:"))
         self.bill_date_input = QDateEdit()
         self.bill_date_input.setCalendarPopup(True)
@@ -344,7 +379,7 @@ class BillingTab(QWidget):
         today_btn.clicked.connect(lambda: self.bill_date_input.setDate(QDate.currentDate()))
         date_row.addWidget(today_btn)
         date_row.addStretch()
-        v.addLayout(date_row)
+        payment_layout.addLayout(date_row)
 
         btn_row = QHBoxLayout()
         clear_btn = QPushButton("Clear Bill")
@@ -352,8 +387,8 @@ class BillingTab(QWidget):
         clear_btn.clicked.connect(self._clear_bill)
         btn_row.addWidget(clear_btn)
         btn_row.addStretch()
-        complete_btn = QPushButton("Complete Bill  ✓")
-        complete_btn.setMinimumWidth(180)
+        complete_btn = self.complete_btn = QPushButton("Complete Bill  ✓")
+        complete_btn.setMinimumWidth(140)
         complete_btn.clicked.connect(self._complete_bill)
         btn_row.addWidget(complete_btn)
         v.addLayout(btn_row)
@@ -446,6 +481,15 @@ class BillingTab(QWidget):
         self.customer_info_label.setVisible(False)
 
     # -------------------------------------------------------------- barcode
+    def _focus_barcode(self):
+        target = self.quick_barcode_input if self._compact and self.compact_tabs.currentWidget() is self.bill_panel else self.barcode_input
+        target.setFocus()
+
+    def _scan_from_bill(self):
+        self.barcode_input.setText(self.quick_barcode_input.text())
+        self.quick_barcode_input.clear()
+        self._on_barcode_scanned()
+
     def _on_barcode_scanned(self):
         code = self.barcode_input.text().strip()
         self.barcode_input.clear()
@@ -462,12 +506,16 @@ class BillingTab(QWidget):
                 gst_rate=item["gst_rate"] if "gst_rate" in item.keys() else 5.0,
             )
             self.barcode_status.setVisible(False)
+            self._focus_barcode()
         else:
             self.barcode_status.setText(
                 f"No item found for barcode '{code}'. Enter it manually below \u2193"
             )
             self.barcode_status.setStyleSheet("color: #c0392b; font-size: 12px;")
             self.barcode_status.setVisible(True)
+            if self._compact:
+                self.compact_tabs.setCurrentWidget(self.entry_scroll)
+            self._focus_barcode()
             self.new_barcode_input.setText(code)
             self.item_name_combo.setFocus()
 
@@ -603,10 +651,12 @@ class BillingTab(QWidget):
         self.rate_input.setValue(0)
         self.qty_input.setValue(1)
         self._refresh_item_suggestions()
-        self.barcode_input.setFocus()
+        self._focus_barcode()
 
     # ------------------------------------------------------------ the cart
     def _add_to_cart(self, item_id, name, category, qty, rate, gst_rate=5.0):
+        if self._compact:
+            self.compact_tabs.setCurrentWidget(self.bill_panel)
         if not self.session.is_admin:
             rate = money(rate)
         for row in self.cart:
@@ -671,6 +721,8 @@ class BillingTab(QWidget):
         self.cart_table.setColumnHidden(5, not self.discount_visible)
         self.cart_table.blockSignals(False)
         self._sync_cart_row_remove_buttons()
+        if self._compact:
+            self.compact_tabs.setTabText(1, f"Bill ({len(self.cart)})")
 
     def _sync_cart_row_remove_buttons(self):
         # A 7th, actions column with a remove button per row. ResizeToContents
@@ -946,4 +998,4 @@ class BillingTab(QWidget):
         self._last_total = 0.0
         self._render_cart()
         self._recalculate_totals()
-        self.barcode_input.setFocus()
+        self._focus_barcode()

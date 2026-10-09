@@ -33,7 +33,7 @@ class FakeLog:
             python.parent.mkdir(parents=True, exist_ok=True)
             python.write_bytes(b'MZ fake interpreter')
         if 'PyInstaller' in command and self.output:
-            exe = Path(cwd) / 'dist' / 'ClothShopBilling.exe'
+            exe = Path(command[command.index('--distpath')+1]) / 'ClothShopBilling.exe'
             exe.parent.mkdir(exist_ok=True)
             exe.write_bytes(b'MZ synthetic executable')
 
@@ -139,6 +139,15 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertEqual(build[build.index('--add-data')+1], str(self.app/'assets')+';assets')
         self.assertIn('PyQt6', build)
         self.assertEqual(build[-1], self.app / 'main.py')
+
+    def test_update_build_targets_staging_without_removing_installed_executable(self):
+        original = self.app / 'dist' / 'ClothShopBilling.exe'
+        original.parent.mkdir(); original.write_bytes(b'MZ existing executable')
+        staged = self.app / 'staged'
+        with patch.object(setup, 'prepare_environment', return_value=self.app/'python.exe'), contextlib.redirect_stdout(io.StringIO()):
+            setup.build(self.app, FakeLog(), dist_dir=staged)
+        self.assertEqual(original.read_bytes(), b'MZ existing executable')
+        self.assertTrue((staged/'ClothShopBilling.exe').read_bytes().startswith(b'MZ'))
 
     def test_missing_executable_does_not_report_success(self):
         stdout = io.StringIO()

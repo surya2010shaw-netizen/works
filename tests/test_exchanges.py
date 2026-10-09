@@ -312,6 +312,9 @@ class ExchangeTests(unittest.TestCase):
         self.assertEqual(cart._grand_total(),2625)
         self.assertEqual(cart.payment_amount_input.value(),1785)
         self.assertFalse(cart.payment_amount_input.isEnabled())
+        self.assertTrue(cart.payment_amount_input.isHidden())
+        self.assertTrue(cart.payment_form.labelForField(cart.payment_amount_input).isHidden())
+        self.assertTrue(cart.bill_date_input.isHidden())
         self.assertTrue(cart.phone_input.isReadOnly())
         with patch('exchanges_tab.ReceiptDialog'):
             cart._complete_bill();cart._complete_bill()

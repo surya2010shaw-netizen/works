@@ -109,7 +109,8 @@ def prepare_environment(app_dir, log):
     return python
 
 
-def build(app_dir, log, skip_build=False):
+def build(app_dir, log, skip_build=False, dist_dir=None):
+    dist_dir = Path(dist_dir) if dist_dir is not None else app_dir / 'dist'
     python = prepare_environment(app_dir, log)
     log.run([python, '-I', '-m', 'pip', 'install', '--upgrade', 'pip'],
             'Updating the app installer', app_dir)
@@ -127,12 +128,12 @@ def build(app_dir, log, skip_build=False):
              '--noconsole', '--onefile', '--name', 'ClothShopBilling',
              '--icon', app_dir / 'assets' / 'icon.ico',
              '--add-data', str(app_dir / 'assets') + ';assets',
-             '--distpath', app_dir / 'dist', '--workpath', app_dir / 'build',
+             '--distpath', dist_dir, '--workpath', app_dir / 'build',
              '--specpath', app_dir / 'build',
              '--exclude-module', 'PyQt5', '--exclude-module', 'PyQt6',
              '--exclude-module', 'PySide2', app_dir / 'main.py'],
             'Building ClothShopBilling.exe (close any running copy first)', app_dir)
-    executable = app_dir / 'dist' / 'ClothShopBilling.exe'
+    executable = dist_dir / 'ClothShopBilling.exe'
     if not executable.is_file():
         raise SetupError('The build finished without creating ' + str(executable))
     with executable.open('rb') as stream:

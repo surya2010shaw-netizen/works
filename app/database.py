@@ -16,6 +16,7 @@ Design notes:
 """
 
 import sqlite3
+import tempfile
 import os
 from datetime import datetime
 from contextlib import contextmanager
@@ -1732,3 +1733,38 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries, EmployeeQueries)
         params.append(limit)
         with self._conn() as conn:
             return conn.execute(q, params).fetchall()
+
+    def backup_database(self, dest_folder=None):
+        """
+        Copies the live database to a timestamped file, using SQLite's own
+        online backup API (safe to call while the app is open and WAL is
+        active -- unlike a plain file copy, this can't grab a half-written
+        page). Returns the full path to the backup file.
+
+        dest_folder defaults to ~/.cloth_shop_billing/backups, next to the
+        live database.
+        """
+        if dest_folder is None:
+            dest_folder = os.path.join(
+                os.path.dirname(self.path), "backups"
+            )
+        os.makedirs(dest_folder, exist_ok=True)
+
+        stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        # Reserve a unique path even for two backups in the same clock tick.
+        fd,dest_path = tempfile.mkstemp(prefix=f"cloth_shop_backup_{stamp}_",suffix=".db",dir=dest_folder)
+        os.close(fd)
+        try:
+            src_conn = sqlite3.connect(self.path)
+            try:
+                dest_conn = sqlite3.connect(dest_path)
+                try:
+                    src_conn.backup(dest_conn)
+                finally:
+                    dest_conn.close()
+            finally:
+                src_conn.close()
+        except Exception:
+            os.unlink(dest_path)
+            raise
+        return dest_path

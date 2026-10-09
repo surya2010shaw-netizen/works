@@ -145,7 +145,7 @@ class RegressionTests(unittest.TestCase):
                         result = unittest.mock.Mock()
                         result.exec.return_value = QDialog.Accepted
                         return result
-                    with patch('receipt.QPrintDialog', side_effect=accept_print):
+                    with patch('receipt.PrinterDialog', side_effect=accept_print):
                         dialog.print_receipt()
                 else:
                     dialog.save_pdf()
@@ -564,7 +564,7 @@ class RegressionTests(unittest.TestCase):
             self.db.add_category(name)
 
     def test_backup_and_csv_include_new_tables_and_optional_values(self):
-        if not hasattr(self.db, 'backup_database'):
+        if not hasattr(self.db, 'export_all_tables_csv'):
             self.skipTest('Backup/export UI exists only in nested desktop copy')
         self.sale(paid=0)
         backup = self.db.backup_database()

@@ -31,9 +31,6 @@ class ExchangeCart(BillingTab):
 
     def _build_ui(self):
         super()._build_ui()
-        heading = self.layout().takeAt(0).widget()
-        heading.hide()
-        heading.deleteLater()
         self.layout().insertWidget(0,make_heading('Exchange purchases','Add the replacement items and any extra purchases'))
 
     def _refresh_phone_completer(self):
@@ -52,20 +49,18 @@ class ExchangeCart(BillingTab):
         self.exchange_label.setTextFormat(Qt.PlainText)
         self.exchange_label.setWordWrap(True)
         box.layout().insertWidget(0,self.exchange_label)
-        # The difference is always paid in full today; keep the form compact.
-        for index in range(box.layout().count()):
-            layout = box.layout().itemAt(index).layout()
-            if isinstance(layout,QFormLayout):
-                layout.labelForField(self.payment_amount_input).hide()
-                self.payment_amount_input.hide()
-                layout.labelForField(self.balance_label).hide()
-            if layout and any(layout.itemAt(i).widget() is self.bill_date_input for i in range(layout.count())):
-                for i in range(layout.count()):
-                    widget = layout.itemAt(i).widget()
-                    if widget:
-                        widget.hide()
         self.balance_label.setWordWrap(True)
         return box
+
+    def _apply_permissions(self):
+        super()._apply_permissions()
+        # Exchange settlement always uses today's date and the full difference.
+        self.payment_form.setRowVisible(self.payment_amount_input, False)
+        self.payment_form.labelForField(self.balance_label).hide()
+        for index in range(self.date_row.count()):
+            widget = self.date_row.itemAt(index).widget()
+            if widget:
+                widget.hide()
 
     def _recalculate_totals(self):
         super()._recalculate_totals()

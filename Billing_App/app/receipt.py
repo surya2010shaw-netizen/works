@@ -9,6 +9,8 @@ from html import escape
 from urllib.parse import urlencode
 
 from io import BytesIO
+from pathlib import Path
+from window_utils import fit_window
 
 from PySide6.QtWidgets import (
     QDialog,
@@ -18,10 +20,11 @@ from PySide6.QtWidgets import (
     QPushButton,
     QFileDialog,
     QMessageBox,
+    QLabel, QComboBox, QSpinBox, QFormLayout, QDialogButtonBox,
 )
 from PySide6.QtCore import QMarginsF, QSizeF, QUrl, QByteArray, QBuffer, QIODevice
 from PySide6.QtGui import QTextDocument, QFont, QPageSize, QPageLayout, QImage
-from PySide6.QtPrintSupport import QPrinter, QPrintDialog
+from PySide6.QtPrintSupport import QPrinter, QPrinterInfo
 
 from widgets import rupees
 
@@ -1109,6 +1112,49 @@ def build_receipt_text(bill_row, bill_items):
     return "\n".join(lines)
 
 
+class PrinterDialog(QDialog):
+    """A visible Qt printer chooser, including a useful no-printer state in .exe builds."""
+    def __init__(self, printer, parent=None):
+        super().__init__(parent)
+        self.printer = printer
+        self.setWindowTitle("Print receipt")
+        layout = QVBoxLayout(self)
+        note = QLabel("Choose a Windows printer for this A4 receipt.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        form = QFormLayout()
+        self.printers = QComboBox()
+        names = QPrinterInfo.availablePrinterNames()
+        self.printers.addItems(names)
+        default = self.printers.findText(QPrinterInfo.defaultPrinterName())
+        if default >= 0:
+            self.printers.setCurrentIndex(default)
+        form.addRow("Printer:", self.printers)
+        self.copies = QSpinBox()
+        self.copies.setRange(1, 99)
+        form.addRow("Copies:", self.copies)
+        layout.addLayout(form)
+        if not names:
+            note.setText("No printer is installed or available. Add your printer in Windows Settings → "
+                         "Bluetooth & devices → Printers & scanners, then reopen Print. "
+                         "You can also save this receipt as a PDF.")
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Print")
+        buttons.button(QDialogButtonBox.Ok).setEnabled(bool(names))
+        buttons.accepted.connect(self._select)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        fit_window(self, 480, 240)
+
+    def _select(self):
+        self.printer.setPrinterName(self.printers.currentText())
+        self.printer.setCopyCount(self.copies.value())
+        if not self.printer.isValid():
+            QMessageBox.warning(self, "Printer unavailable", "Windows could not open this printer. Check its connection and driver.")
+            return
+        self.accept()
+
+
 class ReceiptDialog(QDialog):
     def __init__(self, bill_row, bill_items, parent=None):
         super().__init__(parent)
@@ -1116,7 +1162,7 @@ class ReceiptDialog(QDialog):
         self.setWindowTitle(
             f"Tax Invoice - {_value(bill_row, 'bill_no', '')}"
         )
-        self.resize(900, 1100)
+        fit_window(self, 900, 760)
 
         self.bill_row = bill_row
         self.bill_items = bill_items
@@ -1152,18 +1198,21 @@ class ReceiptDialog(QDialog):
         )
 
         self.text_edit.setDocument(document)
-        layout.addWidget(self.text_edit)
+        self.text_edit.setMinimumSize(0, 80)
+        layout.addWidget(self.text_edit, 1)
 
         btn_row = QHBoxLayout()
 
-        print_btn = QPushButton("Print A4")
+        print_btn = self.print_button = QPushButton("Print A4")
         print_btn.clicked.connect(self.print_receipt)
+        print_btn.setAutoDefault(False)
 
-        pdf_btn = QPushButton("Save as PDF")
+        pdf_btn = self.pdf_button = QPushButton("Save PDF")
         pdf_btn.setProperty("role", "secondary")
         pdf_btn.clicked.connect(self.save_pdf)
+        pdf_btn.setAutoDefault(False)
 
-        close_btn = QPushButton("Close")
+        close_btn = self.close_button = QPushButton("Close")
         close_btn.setProperty("role", "secondary")
         close_btn.clicked.connect(self.accept)
 
@@ -1186,47 +1235,50 @@ class ReceiptDialog(QDialog):
             page_rect.size()
         )
 
-    def print_receipt(self):
-        printer = QPrinter(QPrinter.HighResolution)
-        self._configure_printer(printer)
-
-        dialog = QPrintDialog(printer, self)
-
-        if dialog.exec() == QDialog.Accepted:
+    def _print_document(self, printer):
+        if not printer.isValid():
+            raise RuntimeError("The selected printer is unavailable. Check its driver and connection.")
+        document = self.text_edit.document()
+        previous_size = document.pageSize()
+        try:
             self._prepare_document_for_printer(printer)
-            self.text_edit.document().print_(printer)
-            self.text_edit.document().setPageSize(
-                QSizeF(A4_WIDTH_PT, A4_HEIGHT_PT)
-            )
+            document.print_(printer)
+            if printer.printerState() in (QPrinter.Error, QPrinter.Aborted):
+                raise RuntimeError("The print job failed or was cancelled. Check the Windows print queue and printer connection.")
+            if printer.outputFormat() == QPrinter.PdfFormat:
+                path = Path(printer.outputFileName())
+                with path.open('rb') as stream:
+                    if stream.read(5) != b'%PDF-':
+                        raise RuntimeError("The PDF could not be created. Choose another folder and try again.")
+        finally:
+            document.setPageSize(previous_size)
+
+    def print_receipt(self):
+        try:
+            printer = QPrinter(QPrinter.HighResolution)
+            dialog = PrinterDialog(printer, self)
+            if dialog.exec() != QDialog.Accepted:
+                return
+            self._configure_printer(printer)
+            printer.setDocName(str(_value(self.bill_row, 'bill_no', 'Receipt')))
+            self._print_document(printer)
+        except Exception as exc:
+            QMessageBox.warning(self, "Could not print receipt", str(exc))
 
     def save_pdf(self):
-        default_name = (
-            f"{_value(self.bill_row, 'bill_no', 'invoice')}.pdf"
-        )
-
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Tax Invoice as PDF",
-            default_name,
-            "PDF Files (*.pdf)",
-        )
-
+        default_name = f"{_value(self.bill_row, 'bill_no', 'invoice')}.pdf"
+        path, _ = QFileDialog.getSaveFileName(self, "Save Tax Invoice as PDF", default_name, "PDF Files (*.pdf)")
         if not path:
             return
-
-        printer = QPrinter(QPrinter.HighResolution)
-        self._configure_printer(printer)
-        printer.setOutputFormat(QPrinter.PdfFormat)
-        printer.setOutputFileName(path)
-
-        self._prepare_document_for_printer(printer)
-        self.text_edit.document().print_(printer)
-        self.text_edit.document().setPageSize(
-            QSizeF(A4_WIDTH_PT, A4_HEIGHT_PT)
-        )
-
-        QMessageBox.information(
-            self,
-            "Saved",
-            f"A4 tax invoice saved to:\n{path}",
-        )
+        if not path.lower().endswith('.pdf'):
+            path += '.pdf'
+        try:
+            printer = QPrinter(QPrinter.HighResolution)
+            self._configure_printer(printer)
+            printer.setOutputFormat(QPrinter.PdfFormat)
+            printer.setOutputFileName(path)
+            self._print_document(printer)
+        except Exception as exc:
+            QMessageBox.warning(self, "Could not save PDF", str(exc))
+            return
+        QMessageBox.information(self, "Saved", f"A4 tax invoice saved to:\n{path}")
